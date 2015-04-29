@@ -62,9 +62,8 @@ class PreInitConfig(Docker):
             syslog.syslog(syslog.LOG_ERR, "RabbitMQ Pre-init:run_service Error: " + e.__str__())
 
     def _node_ip(self):
-        # return "192.168.56.105"
-        # return socket.gethostbyname(socket.getfqdn())
-        return self.get_node_address()
+        node_info = self.get_node_address()
+        return node_info.get("ip")
 
     def wait_master(self):
         address = None
