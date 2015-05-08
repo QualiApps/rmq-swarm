@@ -2,6 +2,7 @@
 
 from Docker import Docker
 import consul
+import syslog
 import string
 import os
 import subprocess
@@ -15,7 +16,7 @@ class PreInitConfig(Docker):
     rmq_master_key = os.environ.get("MASTER_KEY_VALUE", "master_rmq")
     service = os.environ.get("RMQ_SERVICE", "rmq")
     retries_delay = 5
-    consul_service = os.environ.get("CONSUL_SERVICE_NAME", "consul")  # "consul - 192.168.56.100"
+    consul_service = os.environ.get("CONSUL_SERVICE_NAME", "consul")
 
     def __init__(self):
         Docker.__init__(self)
@@ -40,7 +41,7 @@ class PreInitConfig(Docker):
                 else:
                     self.run_slave()
             else:
-                if kv_master.get("Value", None) == service_name:
+                if kv_master.get("Value") == service_name:
                     self.run_master()
                 else:
                     self.run_slave()
@@ -69,23 +70,52 @@ class PreInitConfig(Docker):
             else:
                 self.run_service(self._get_slave_options())
 
-    def _get_slave_options(self):
-        """
-        slave RMQ options
-        m - short master node name (it's consul service = container hostname, depends of RMQ clustering options)
-        c - clustering
-        r - if specified that it's ram cluster node, default disc
-        """
-        return "-m " + self._get_master_service(), "-c 1"
-
-    def run_service(self, *args):
+    def run_service(self, args=[]):
         """
         runs rmq service (master or slave)
         """
         try:
-            subprocess.call([self.init_script] + list(args))
+            subprocess.call([self.init_script] + args)
         except Exception as e:
             syslog.syslog(syslog.LOG_ERR, "RabbitMQ Pre-init:run_service Error: " + e.__str__())
+
+    def get_master_service_ip(self):
+        """
+        gets current master RMQ ip by consul service name
+        """
+        current_master = self._get_master_service()
+        service_info = self.consul_cluster_client.catalog.service(service=current_master)[1]
+        if len(service_info):
+            return self.consul_cluster_client.catalog.service(service=current_master)[1][0].get("Address")
+
+    def wait_master(self):
+        """
+        wait master RMQ, 60 sec
+        returns True|None
+        """
+        address = None
+        port = None
+        master = self._get_master_service()
+        services = self.consul_cluster_client.catalog.service(service=master)[1]
+        for item in services:
+            if "5672" in item.get("ServiceID") and master in item.get("ServiceID"):
+                address = item.get("Address")
+                port = item.get("ServicePort")
+                break
+        if address and port:
+            retries = 0
+            while retries < 12:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                result = sock.connect_ex((address, port))
+                sock.close()
+                if not result:
+                    return True
+                time.sleep(self.retries_delay)
+                retries += 1
+
+    def forget_cluster_node(self):
+        """TODO: remove rmq node remotely."""
+        pass
 
     def _change_master(self):
         """
@@ -97,22 +127,26 @@ class PreInitConfig(Docker):
         services = self.consul_cluster_client.catalog.service(service=self.service)[1]
         current_service_ip = self.get_master_service_ip()
         # create node lists, except current and old master node
-        nodes = list(set(node.get("ServiceName") for node in services
+        nodes = list(set(node.get("Address") for node in services
                          if node.get("Address") not in (self._node_ip, current_service_ip)))
 
         if nodes:
             # if we have free rmq nodes, gets one of them
-            rmq_node = nodes[0]
             h = httplib2.Http(".cache")
             h.add_credentials('rabbit', 'rabbit')
-            (resp_headers, content) = h.request("//{}:15672/api/nodes".format(rmq_node), "GET")
+            for node in nodes:
+                try:
+                    (resp_headers, content) = h.request("http://{}:15672/api/nodes".format(node), "GET")
 
-            if content:
-                content = json.loads(content)
-                cluster_nodes = [item.get("name").split("@")[1] for item in content if
-                                 item.get("name", None) and item.get("running", False) is True]
-                if len(cluster_nodes):
-                    new_service = cluster_nodes[0]
+                    if content:
+                        content = json.loads(content)
+                        cluster_nodes = [item.get("name").split("@")[1] for item in content if
+                                         item.get("name", None) and item.get("running", False) is True]
+                        if len(cluster_nodes):
+                            new_service = cluster_nodes[0]
+                            break
+                except Exception:
+                    continue
 
         # update KV by new service name (master rmq)
         cas = self.consul_cluster_client.kv.get(self.rmq_master_key)[1].get("ModifyIndex")
@@ -122,33 +156,28 @@ class PreInitConfig(Docker):
 
         return new_service
 
-    def get_master_service_ip(self):
+    def _get_slave_options(self):
         """
-        gets current master RMQ ip by consul service name
+        slave RMQ options
+        m - short master node name (it's consul service = container hostname, depends of RMQ clustering options)
+        c - clustering
+        r - if specified that it's ram cluster node, default disc
         """
-        current_master = self._get_master_service()
-        service_info = self.consul_cluster_client.catalog.service(service=current_master)[1]
-        if len(service_info):
-            return self.consul_cluster_client.catalog.service(service=current_master)[1][0].get("Address")
-
-    def forget_cluster_node(self):
-        """TODO: remove rmq node remotely."""
-        pass
+        return ["-m", self._get_master_service(), "-c", "1"]
 
     def _create_service(self):
         """
         creates additional consul service by container hostname
         it dns name will be used for rabbitmq clustering
         """
-        node_name = self._getNodeNameByIP(self._node_ip)
         container_hostname = self._getContainerHostname()
-        if node_name:
+        if container_hostname:
             rmq_ports = (5672, 4369, 25672)  # it's standard ports of RMQ
             client = consul.Consul(self._node_ip)
             for port in rmq_ports:
                 # register new service
                 # TODO: removes when the container is turned off, it needs check health script
-                client.agent.service.register(name=node_name,
+                client.agent.service.register(name=container_hostname,
                                               service_id=":".join((container_hostname, str(port))),
                                               port=int(port))
         return container_hostname
@@ -170,34 +199,8 @@ class PreInitConfig(Docker):
 
     def _node_ip(self):
         """Gets current node IP through Docker API"""
-        #return "192.168.99.102"
         node_info = self.get_node_address()
         return node_info.get("ip")
-
-    def wait_master(self):
-        """
-        wait master RMQ, 60 sec
-        returns True|None
-        """
-        address = None
-        port = None
-        master = self._get_master_service()
-        services = self.consul_cluster_client.catalog.service(service=master)[1]
-        for item in services:
-            if "4369" in item.get("ServiceID") and master in item.get("ServiceID"):
-                address = item.get("Address")
-                port = item.get("ServicePort")
-                break
-        if address and port:
-            retries = 0
-            while retries < 12:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                result = sock.connect_ex((address, port))
-                sock.close()
-                if not result:
-                    return True
-                time.sleep(self.retries_delay)
-                retries += 1
 
     def _get_master_service(self):
         """Gets master RMQ service name from consul KV"""

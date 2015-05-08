@@ -6,6 +6,20 @@ from pre_init import PreInitConfig
 
 
 class TestPreInitConfig(unittest.TestCase):
+    @mock.patch('pre_init.consul')
+    @mock.patch('pre_init.PreInitConfig.check_rmq')
+    @mock.patch('pre_init.PreInitConfig._node_ip')
+    @mock.patch('pre_init.PreInitConfig._getContainerHostname')
+    @mock.patch('pre_init.Docker')
+    def test_check_rmq(self, mock_docker, mock_hostname, mock_node_ip, mock_check_rmq, mock_consul):
+        mock_docker.return_value = object
+        mock_consul.return_value = object
+        mock_check_rmq.return_value = None
+        mock_node_ip.return_value = "10.1.1.3"
+        mock_hostname.return_value = "container_hostname"
+        init = PreInitConfig()
+        init.check_rmq()
+
     @mock.patch('pre_init.PreInitConfig.__init__')
     @mock.patch('pre_init.PreInitConfig.run_service')
     @mock.patch('pre_init.PreInitConfig._get_slave_options')
@@ -48,7 +62,7 @@ class TestPreInitConfig(unittest.TestCase):
     @mock.patch('pre_init.PreInitConfig.wait_master')
     def test_run_slave_after_switch_master(self, mock_wait, mock_get_options, mock_run_service, mock_init,
                                            mock_change_master, mock_hostname):
-        rmq_slave_options = "-m SERVICE_NAME", "-c 1"
+        rmq_slave_options = ['-m', 'SERVICE_NAME', '-c', '1']
         mock_wait.return_value = False
         mock_get_options.return_value = rmq_slave_options
         mock_change_master.return_value = "new_master_service"
@@ -66,7 +80,7 @@ class TestPreInitConfig(unittest.TestCase):
     @mock.patch('pre_init.PreInitConfig.__init__')
     @mock.patch('pre_init.PreInitConfig._get_master_service')
     def test_get_slave_options(self, mock_master_service, mock_init):
-        expected_result = "-m SERVICE_NAME", "-c 1"
+        expected_result = ['-m', 'SERVICE_NAME', '-c', '1']
         mock_master_service.return_value = "SERVICE_NAME"
         mock_init.return_value = None
         init = PreInitConfig()
@@ -292,23 +306,18 @@ class TestPreInitConfig(unittest.TestCase):
         self.assertEqual(result, expected_result)
 
     @mock.patch('pre_init.consul.Consul')
-    @mock.patch('pre_init.PreInitConfig._getNodeNameByIP')
     @mock.patch('pre_init.PreInitConfig.check_rmq')
     @mock.patch('pre_init.PreInitConfig._getContainerHostname')
     @mock.patch('pre_init.PreInitConfig.__init__')
-    def test_create_service(self, mock_init, mock_hostname, mock_check_rmq,
-                            mock_node_name, mock_reg):
+    def test_create_service(self, mock_init, mock_hostname, mock_check_rmq, mock_reg):
         mock_init.return_value = None
         mock_check_rmq.return_value = None
         node_ip = "10.1.1.3"
         mock_hostname.return_value = "container_hostname"
-        mock_node_name.return_value = "node3"
 
         init = PreInitConfig()
         init._node_ip = node_ip
         service_name = init._create_service()
-        self.assertEqual(mock_node_name.call_count, 1)
-        self.assertEqual(mock_node_name.call_args_list[0][0], (node_ip,))
         self.assertEqual(mock_hostname.call_count, 1)
         self.assertEqual(mock_reg.call_count, 1)
         self.assertEqual(service_name, "container_hostname")
@@ -376,17 +385,17 @@ class TestPreInitConfig(unittest.TestCase):
         mock_consul.return_value = object
         mock_check_rmq.return_value = None
         mock_node_ip.return_value = "10.1.1.3"
-        mock_m_service.return_value = "rabbit2"
+        mock_m_service.return_value = "rabbit1"
 
         init = PreInitConfig()
         response = (123, [
             {
                 "Node": "foobar",
                 "Address": "10.1.1.1",
-                "ServiceID": "rabbit1:15672",
+                "ServiceID": "rabbit1:5672",
                 "ServiceName": "rabbit1",
                 "ServiceTags": [],
-                "ServicePort": 15672
+                "ServicePort": 5672
             },
             {
                 "Node": "foobar",
@@ -402,9 +411,9 @@ class TestPreInitConfig(unittest.TestCase):
         result = init.wait_master()
 
         self.assertEqual(init.consul_cluster_client.catalog.service.call_count, 1)
-        self.assertEqual(init.consul_cluster_client.catalog.service.call_args_list[0][1], {"service": "rabbit2"})
+        self.assertEqual(init.consul_cluster_client.catalog.service.call_args_list[0][1], {"service": "rabbit1"})
         self.assertEqual(mock_sock_connect.call_count, 1)
-        self.assertEqual(mock_sock_connect.call_args_list[0][0][0], ("10.1.1.2", 4369))
+        self.assertEqual(mock_sock_connect.call_args_list[0][0][0], ("10.1.1.1", 5672))
 
         self.assertTrue(result)
 
@@ -421,17 +430,17 @@ class TestPreInitConfig(unittest.TestCase):
         mock_consul.return_value = object
         mock_check_rmq.return_value = None
         mock_node_ip.return_value = "10.1.1.3"
-        mock_m_service.return_value = "rabbit2"
+        mock_m_service.return_value = "rabbit1"
 
         init = PreInitConfig()
         response = (123, [
             {
                 "Node": "foobar",
                 "Address": "10.1.1.1",
-                "ServiceID": "rabbit1:15672",
+                "ServiceID": "rabbit1:5672",
                 "ServiceName": "rabbit1",
                 "ServiceTags": [],
-                "ServicePort": 15672
+                "ServicePort": 5672
             },
             {
                 "Node": "foobar",
@@ -447,9 +456,9 @@ class TestPreInitConfig(unittest.TestCase):
         result = init.wait_master()
 
         self.assertEqual(init.consul_cluster_client.catalog.service.call_count, 1)
-        self.assertEqual(init.consul_cluster_client.catalog.service.call_args_list[0][1], {"service": "rabbit2"})
+        self.assertEqual(init.consul_cluster_client.catalog.service.call_args_list[0][1], {"service": "rabbit1"})
         self.assertEqual(mock_sock_connect.call_count, 12)
-        self.assertEqual(mock_sock_connect.call_args_list[0][0][0], ("10.1.1.2", 4369))
+        self.assertEqual(mock_sock_connect.call_args_list[0][0][0], ("10.1.1.1", 5672))
 
         self.assertIsNone(result)
 
