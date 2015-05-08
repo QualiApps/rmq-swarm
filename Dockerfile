@@ -2,20 +2,21 @@
 
 FROM fedora:21
 
-MAINTAINER Yury Kavaliou <test@test.com>
+MAINTAINER Yury Kavaliou <yury_kavaliou@epam.com>
 
 RUN rpm --import http://www.rabbitmq.com/rabbitmq-signing-key-public.asc
 RUN yum install -y https://www.rabbitmq.com/releases/rabbitmq-server/v3.4.3/rabbitmq-server-3.4.3-1.noarch.rpm \
     python-pip \
     && pip install docker-py \
-    python-consul
+    python-consul \
+    httplib2
 
 RUN rabbitmq-plugins enable --offline rabbitmq_mqtt
 RUN rabbitmq-plugins enable --offline rabbitmq_management
 
-ADD /files/startrmq.sh /usr/local/sbin/startrmq.sh
-ADD /files/rabbitmq.config /etc/rabbitmq/rabbitmq.config
-ADD /files/.erlang.cookie /var/lib/rabbitmq/.erlang.cookie
+COPY ./files/startrmq.sh /usr/local/sbin/startrmq.sh
+COPY ./files/rabbitmq.config /etc/rabbitmq/rabbitmq.config
+COPY ./files/.erlang.cookie /var/lib/rabbitmq/.erlang.cookie
 COPY ./files/pre_init.py /usr/local/sbin/pre_init.py
 COPY ./files/Docker.py /usr/local/sbin/Docker.py
 
