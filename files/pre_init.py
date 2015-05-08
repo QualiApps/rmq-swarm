@@ -77,7 +77,7 @@ class PreInitConfig(Docker):
         try:
             subprocess.call([self.init_script] + args)
         except Exception as e:
-            syslog.syslog(syslog.LOG_ERR, "RabbitMQ Pre-init:run_service Error: " + e.__str__())
+            syslog.syslog(syslog.LOG_ERR, "RabbitMQ Pre-init:run_service Error: " + e)
 
     def get_master_service_ip(self):
         """
@@ -113,9 +113,12 @@ class PreInitConfig(Docker):
                 time.sleep(self.retries_delay)
                 retries += 1
 
-    def forget_cluster_node(self):
+    def forget_cluster_node(self, old_rmq_node):
         """TODO: remove rmq node remotely."""
-        pass
+        try:
+            subprocess.call(["rabbitmqctl", "forget_cluster_node", "--offline", "rabbit@" + str(old_rmq_node)])
+        except Exception as e:
+            syslog.syslog(syslog.LOG_ERR, "RabbitMQ Pre-init:forget_cluster_node Error: " + e)
 
     def _change_master(self):
         """
@@ -148,11 +151,10 @@ class PreInitConfig(Docker):
                 except Exception:
                     continue
 
+        self.forget_cluster_node(self._get_master_service())
         # update KV by new service name (master rmq)
         cas = self.consul_cluster_client.kv.get(self.rmq_master_key)[1].get("ModifyIndex")
         self.consul_cluster_client.kv.put(self.rmq_master_key, new_service, cas=cas)
-
-        self.forget_cluster_node()
 
         return new_service
 
