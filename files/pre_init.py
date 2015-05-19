@@ -13,10 +13,11 @@ import json
 
 
 class PreInitConfig(Docker):
-    rmq_master_key = os.environ.get("MASTER_KEY_VALUE", "master_rmq")
-    service = os.environ.get("RMQ_SERVICE", "rmq")
+    rmq_master_key = os.environ.get("MASTER_KEY_VALUE", "master_feed")
+    service = os.environ.get("RMQ_SERVICE", "feed")
     retries_delay = 5
     consul_service = os.environ.get("CONSUL_SERVICE_NAME", "consul")
+    rmq_clustering_port = 25672
 
     def __init__(self):
         Docker.__init__(self)
@@ -98,7 +99,7 @@ class PreInitConfig(Docker):
         master = self._get_master_service()
         services = self.consul_cluster_client.catalog.service(service=master)[1]
         for item in services:
-            if "5672" in item.get("ServiceID") and master in item.get("ServiceID"):
+            if str(self.rmq_clustering_port) in item.get("ServiceID") and master in item.get("ServiceID"):
                 address = item.get("Address")
                 port = item.get("ServicePort")
                 break
@@ -174,7 +175,7 @@ class PreInitConfig(Docker):
         """
         container_hostname = self._getContainerHostname()
         if container_hostname:
-            rmq_ports = (5672, 4369, 25672)  # it's standard ports of RMQ
+            rmq_ports = self.rmq_clustering_port,  # it's standard ports of RMQ
             client = consul.Consul(self._node_ip)
             for port in rmq_ports:
                 # register new service
